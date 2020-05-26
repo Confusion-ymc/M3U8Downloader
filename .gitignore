@@ -127,3 +127,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+m3u8_output/
+m3u8_temp/
