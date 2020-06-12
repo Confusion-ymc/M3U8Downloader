@@ -51,8 +51,8 @@ class FileController(QObject):
         self._signal.emit('开始解析m3u8文件...')
         ts_list = []
         split_url = urlparse(start_url)
-        host = split_url.scheme + '://' + split_url.hostname
-
+        host = '{scheme}://{hostname}{port}'.format(scheme=split_url.scheme, hostname=split_url.hostname,
+                                                    port=(':' + str(split_url.port)) if split_url.port else '')
         m3u8_path = '/' + start_url.split('/')[-1]
         dir_path = start_url[len(host):][:-len(m3u8_path)]
 
