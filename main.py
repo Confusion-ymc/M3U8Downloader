@@ -7,7 +7,10 @@ import time
 import threading
 
 from urllib.parse import urlparse
-from Crypto.Cipher import AES
+try:
+    from Crypto.Cipher import AES
+except ImportError:
+    from Cryptodome.Cipher import AES
 import requests
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
