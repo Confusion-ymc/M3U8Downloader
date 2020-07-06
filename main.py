@@ -1,5 +1,3 @@
-import ctypes
-import inspect
 import os
 import sys
 from queue import Queue
@@ -7,6 +5,7 @@ import time
 import threading
 
 from urllib.parse import urlparse
+
 try:
     from Crypto.Cipher import AES
 except ImportError:
@@ -121,7 +120,7 @@ class FileController(QObject):
         # print('ffmpeg use {}'.format(time.time() - s))
         s = time.time()
         # 使用python合并
-        my_concat(self.final_file_name_list)
+        my_concat(self.final_file_name_list, make_file_name(main_ui.file_name.text()))
         print('my contact use {}'.format(time.time() - s))
 
     def clear_cache(self):
@@ -282,8 +281,16 @@ class DownLoader(QThread):
         print('thread {} exit'.format(self.id_int))
 
 
-def my_concat(file_name_list, out_name='out'):
-    with open('{}/{}.mp4'.format(OUT_DIR, out_name + str(time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime()))),
+def make_file_name(user_set_name):
+    if not user_set_name:
+        file_name = str(time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime()))
+    else:
+        file_name = user_set_name
+    return file_name
+
+
+def my_concat(file_name_list, out_name):
+    with open('{}/{}'.format(OUT_DIR, out_name),
               'wb+') as f:
         for file_name in file_name_list:
             with open(TEMP_DIR + '/' + file_name, 'rb') as son_data:
@@ -296,12 +303,12 @@ def my_concat(file_name_list, out_name='out'):
         f.flush()
 
 
-def ffmpeg_concat(file_name_list, out_name='out'):
+def ffmpeg_concat(file_name_list, out_name):
     with open(TEMP_DIR + '/list.txt', 'w+', encoding='utf-8') as f:
         for file_name in file_name_list:
             f.write("file '{}'\n".format(file_name))
         f.flush()
-    ver = os.popen("ffmpeg -y -f concat -safe 0 -i {}/list.txt -c copy {}/{}.mp4".format(TEMP_DIR, OUT_DIR, out_name))
+    ver = os.popen("ffmpeg -y -f concat -safe 0 -i {}/list.txt -c copy {}/{}".format(TEMP_DIR, OUT_DIR, out_name))
     ver.close()
 
 
