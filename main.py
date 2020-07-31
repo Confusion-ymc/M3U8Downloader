@@ -45,6 +45,7 @@ class FileController(QObject):
         self.all_task = Queue()
         self.final_file_name_list = []
         self.key = None
+        self.iv = None
         self._signal.connect(print_log)
         self._finish_signal.connect(set_finish)
 
@@ -69,21 +70,24 @@ class FileController(QObject):
             data_list = data.text.split('\n')
 
             for i in data_list:
-                if i.startswith('#EXT-X-KEY:'):
+                if not key and i.startswith('#EXT-X-KEY:'):
                     self._signal.emit('发现密钥')
-                    i = i.lstrip('#EXT-X-KEY:')
-                    key_dic_temp = i.split(',')
+                    key_line = i.lstrip('#EXT-X-KEY:')
+                    key_dic_temp = key_line.split(',')
                     key_dic = {}
                     for n in key_dic_temp:
-                        k, v = n.split('=')
-                        key_dic[k] = v
+                        temp_list = n.split('=')
+                        key_dic[temp_list[0]] = '='.join(temp_list[1:])
+                    self.iv = key_dic.get('IV').replace("0x", "")[:16].encode() if key_dic.get('IV') else ''
                     key_path = key_dic.get('URI').strip('"').strip("'")
                     if key_path.startswith('/'):
                         key_url = host + key_path
+                    elif key_path.startswith('http'):
+                        key_url = key_path
                     else:
                         key_url = host + dir_path + key_path
                     self._signal.emit('加密方式: {}, 请求密钥...'.format(key_dic.get('METHOD')))
-                    key = req_url(key_url).text
+                    key = req_url(key_url).content
                     self._signal.emit('获取密钥成功： {}'.format(key))
 
                 if i.startswith('#'):
@@ -96,9 +100,7 @@ class FileController(QObject):
                         dir_path = (dir_path + '/' + i)[:-len(m3u8_path)]
                     data = None
                     break
-                elif not i.endswith('.ts'):
-                    continue
-                else:
+                elif i and not i.startswith('#'):
                     if i.startswith('/'):
                         ts_list.append(host + i)
                     else:
@@ -149,7 +151,11 @@ class QDownloadThreadStart(QThread):
             os.makedirs(OUT_DIR)
         self.file_controller.find_ts(self.start_url.strip())
         if self.file_controller.key:
-            cryptor = AES.new(self.file_controller.key.encode(), AES.MODE_CBC) if self.file_controller.key else None
+            if not self.file_controller.iv:
+                cryptor = AES.new(self.file_controller.key.encode(), AES.MODE_CBC)
+            else:
+                mode = AES.MODE_CBC
+                cryptor = AES.new(self.file_controller.key, mode, self.file_controller.iv)
         else:
             cryptor = None
         for i in self.downloader_list:
