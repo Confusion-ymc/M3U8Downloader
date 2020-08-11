@@ -322,12 +322,14 @@ class Core(QThread):
         try:
             thread_count = int(thread_count_)
         except:
-            thread_count = 1
+            thread_count = 256
         if 256 < thread_count:
             thread_count = 256
         if thread_count < 1:
             thread_count = 1
-        self._set_thread_count_and_filename_signal.emit(thread_count, make_file_name(file_name_))
+        self.save_file_name = make_file_name(file_name_)
+        self.thread_count = thread_count
+        self._set_thread_count_and_filename_signal.emit(thread_count, self.save_file_name)
 
     def run(self):
         self._start_btn_signal.emit(2)
