@@ -24,58 +24,18 @@ import re
 disable_warnings()
 
 
-def req_url(url):
+def req_url(url, **kwargs):
     print(url)
     try:
         data = requests.get(url=url, timeout=10, verify=False, headers={
-            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36'})
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36'},
+                            **kwargs)
         if data.status_code != 200:
             raise Exception('{}'.format(data.status_code))
         return data
     except Exception as e:
         print('请求失败， {}, {}'.format(url, e))
         return None
-
-
-class MyDownloadUi(Ui_Form):
-    def __init__(self):
-        super(MyDownloadUi, self).__init__()
-        self.is_start = False
-        self.log_queue = Queue()
-        self.task_count = Queue()
-        self.back_ground_task = None
-
-    def set_action(self):
-        self.startButton.clicked.connect(self.start_btn_click)
-        self.open_folderButton.clicked.connect(self.open_folder_btn_click)
-
-    def start_btn_click(self):
-        print(self.is_start)
-        self.is_start = True if not self.is_start else False
-
-        if self.is_start:
-            downloader = ThreadDownloader()
-            file_manager = FileManager()
-            key_manager = KeyManager()
-
-            self.back_ground_task = Core(url=self.url_input.text(), save_file_name=self.file_name.text(),
-                                         thread_count=self.thread_count.value(), downloader=downloader,
-                                         file_manager=file_manager, key_manager=key_manager)
-            # self.back_ground_task.check_fill(file_name_=self.file_name.text(), thread_count_=self.thread_count.value())
-            # self.back_ground_task.init(url=self.url_input.text(), file_name=self.file_name.text(),
-            #                            thread_count=self.thread_count.value())
-            self.back_ground_task.start()
-        else:
-            self.back_ground_task.stop_flag = True
-
-    def open_folder_btn_click(self):
-        path = os.path.join(os.getcwd(), OUT_DIR)
-        try:
-            # windows
-            os.startfile(path)
-        except:
-            # mac
-            os.system("open {}".format(path))
 
 
 def make_url(host, dir_path, api):
@@ -87,33 +47,126 @@ def make_url(host, dir_path, api):
         return host + dir_path + '/' + api
 
 
-class M3U8File:
+class MyDownloadUi(Ui_Form):
+    def __init__(self):
+        super(MyDownloadUi, self).__init__()
+        self.is_start = False
+        self.log_queue = Queue()
+        self.back_ground_task = None
+
+    def set_action(self):
+        self.startButton.clicked.connect(self.start_btn_click)
+        self.open_folderButton.clicked.connect(self.open_folder_btn_click)
+
+    def start_btn_click(self):
+        self.is_start = True if not self.is_start else False
+        print(self.is_start)
+
+        if self.is_start:
+            file_manager = FileManager()
+
+            self.back_ground_task = Core(url=self.url_input.text(), save_file_name=self.file_name.text(),
+                                         thread_count=self.thread_count.value(),
+                                         file_manager=file_manager)
+            self.back_ground_task.check_fill(self.back_ground_task.thread_count, self.back_ground_task.save_file_name,
+                                             self.back_ground_task.url)
+            self.back_ground_task.downloader = ThreadDownloader(self.back_ground_task.thread_count,
+                                                                self.back_ground_task.url_queue)
+            self.back_ground_task.start()
+        else:
+            self.back_ground_task.downloader.stop_flag = True
+
+    def open_folder_btn_click(self):
+        path = os.path.join(os.getcwd(), OUT_DIR)
+        try:
+            # windows
+            os.startfile(path)
+        except:
+            # mac
+            os.system("open {}".format(path))
+
+
+class DownloadItem:
+    def __init__(self, url, headers=None):
+        self.url = url
+        self.headers = {}
+        self.file_name = url.split('/')[-1]
+        if headers:
+            self.headers = headers
+            self.file_name = self.file_name.replace('.', '') + '_' + headers.get('Range').split('=')[-1]
+
+
+class DownloadInfo:
     def __init__(self, start_url):
-        self.star_url = start_url
+        self.start_url = start_url
         self.host = None
         self.dir_path = None
         self.iv = None
         self.key = None
         self.mode = None
+        self.crypto_ = None
         self.ts_list = []
 
     def loads(self):
+        pass
+
+    def decode(self, data):
+        if self.crypto_:
+            return self.crypto_.decrypt(data)
+        else:
+            return data
+
+
+class SimpleFile(DownloadInfo):
+    def __init__(self, start_url, thread_count):
+        super(SimpleFile, self).__init__(start_url)
+        self.thread_count = thread_count
+
+    def loads(self):
         try:
-            split_url = urlparse(self.star_url)
+            response = req_url(self.start_url, stream=True)
+            file_size = int(response.headers['content-length'])
+            offset = int(file_size / self.thread_count) + 1
+            e_size = 0
+            while file_size >= e_size:
+                s_size = e_size
+                e_size = s_size + offset
+                self.ts_list.append(
+                    DownloadItem(url=self.start_url,
+                                 headers={'Range': "bytes=%d-%d" % (s_size, e_size)}))
+            return True
+        except:
+            return False
+
+
+class M3U8File(DownloadInfo):
+    def __init__(self, start_url):
+        super(M3U8File, self).__init__(start_url)
+        self.key = None
+        self.iv = None
+        self.mode = None
+        self.mode_map = {
+            'AES-128': AES.MODE_CBC
+        }
+
+    def loads(self):
+        try:
+            split_url = urlparse(self.start_url)
             self.host = '{scheme}://{hostname}{port}'.format(scheme=split_url.scheme, hostname=split_url.hostname,
                                                              port=(':' + str(
                                                                  split_url.port)) if split_url.port else '')
-            self.dir_path = '/' + '/'.join(self.star_url.split('//')[-1].split('/')[1:-1])
+            self.dir_path = '/' + '/'.join(self.start_url.split('//')[-1].split('/')[1:-1])
 
-            text_data = req_url(self.star_url).text
+            text_data = req_url(self.start_url).text
             new_url = re.findall(r'.*?\.m3u8.*', text_data)
             if new_url:
-                self.star_url = make_url(self.host, self.dir_path, new_url[0])
+                self.start_url = make_url(self.host, self.dir_path, new_url[0])
                 return self.loads()
             else:
-
                 self.find_key(text_data)
                 self.find_ts(text_data)
+                if not self.ts_list:
+                    return False
                 return True
         except:
             return False
@@ -130,45 +183,23 @@ class M3U8File:
             temp_list = n.split('=')
             key_dic[temp_list[0]] = '='.join(temp_list[1:]).strip('"').strip("'")
         self.iv = key_dic.get('IV').replace("0x", "")[:16].encode() if key_dic.get('IV') else None
-        self.mode = key_dic.get('METHOD')
+        self.mode = self.mode_map.get(key_dic.get('METHOD', '').upper())
         key_url = make_url(self.host, self.dir_path, key_dic.get('URI'))
         self.key = req_url(key_url).content
+        # init
+        if not self.key or not self.mode:
+            return
+        if self.mode:
+            if self.key and self.iv:
+                self.crypto_ = AES.new(self.key, self.mode, self.iv)
+            else:
+                self.crypto_ = AES.new(self.key, self.mode)
 
     def find_ts(self, text_data):
         ts_data = re.findall(r'(?!#).*?\.ts.*', text_data)
-        final = []
+        self.ts_list = []
         for i in ts_data:
-            final.append(make_url(self.host, self.dir_path, i))
-        self.ts_list = final
-
-
-class KeyManager:
-    def __init__(self):
-        self.key = None
-        self.iv = None
-        self.mode = None
-        self.crypter = None
-        self.mode_map = {
-            'AES-128': AES.MODE_CBC
-        }
-
-    def init(self, key_data, iv_data, mode_str):
-        if not mode_str:
-            return
-        self.key = key_data
-        self.iv = iv_data
-        self.mode = self.mode_map.get(mode_str.upper())
-        if self.mode:
-            if self.key and self.iv:
-                self.crypter = AES.new(self.key, self.mode, self.iv)
-            else:
-                self.crypter = AES.new(self.key, self.mode)
-
-    def decode(self, data):
-        if self.crypter:
-            return self.crypter.decrypt(data)
-        else:
-            return data
+            self.ts_list.append(DownloadItem(url=make_url(self.host, self.dir_path, i)))
 
 
 class FileManager(QObject):
@@ -176,26 +207,24 @@ class FileManager(QObject):
 
     def __init__(self):
         super(FileManager, self).__init__()
-        self.file_list = []
-        self.key_manager = None
         self.out_name = None
+        self.download_file = None
         self._progress_signal.connect(set_progress)
 
-    def init(self, out_name, key_manager: KeyManager, ts_list):
-        self.file_list = [i.split('/')[-1].replace('.', '').replace('.', '') for i in ts_list]
-        self.key_manager = key_manager
+    def init(self, out_name, download_file: DownloadInfo):
+        self.download_file = download_file
         self.out_name = out_name
 
     def concat(self):
-        all_files_count = len(self.file_list)
+        all_files_count = len(self.download_file.ts_list)
         now = 0
         with open('{}/{}'.format(OUT_DIR, self.out_name), 'wb+') as f:
-            for file_name in self.file_list:
-                with open(TEMP_DIR + '/' + file_name, 'rb') as son_data:
+            for file_item in self.download_file.ts_list:
+                with open(TEMP_DIR + '/' + file_item.file_name, 'rb') as son_data:
                     while True:
                         d = son_data.read(1024)
                         if d:
-                            decode_data = self.key_manager.decode(d)
+                            decode_data = self.download_file.decode(d)
                             f.write(decode_data)
                         else:
                             break
@@ -204,61 +233,76 @@ class FileManager(QObject):
             f.flush()
 
     def clear(self):
-        for cache_file in self.file_list:
-            os.remove(TEMP_DIR + '/' + cache_file)
+        for cache_file in self.download_file.ts_list:
+            FileManager.delete_file(TEMP_DIR + '/' + cache_file.file_name)
         if os.path.isfile(TEMP_DIR + '/list.txt'):
-            os.remove(TEMP_DIR + '/list.txt')
+            FileManager.delete_file(TEMP_DIR + '/list.txt')
+
+    @staticmethod
+    def delete_file(file_name):
+        try:
+            os.remove(file_name)
+        except FileNotFoundError:
+            pass
 
 
 class ThreadDownloader(QThread):
     _signal = pyqtSignal(str)
+    _start_btn_signal = pyqtSignal(int)
     _progress_signal = pyqtSignal(int, int)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36'}
 
-    def __init__(self):
+    def __init__(self, task_max_count, task_queue):
         super(ThreadDownloader, self).__init__()
-        self.task_queue = None
         self.task_count = None
         self.finish_count = 0
-        self.task_max_count = None
         self.finish = False
+        self.stop_flag = False
         self._progress_signal.connect(set_progress)
         self._signal.connect(print_log)
-
-    def init(self, task_max_count, task_queue):
+        self.tasks = []
+        self.download_task = None
         self.task_max_count = task_max_count
         self.task_queue = task_queue
+        self._start_btn_signal.connect(set_start_btn)
 
-    async def fetch(self, url, headers, session: aiohttp.ClientSession):
-        file_name = url.split('/')[-1].replace('.', '')
+    async def fetch(self, download_item: DownloadItem, session: aiohttp.ClientSession):
+        file_name = download_item.file_name
         if check_file_exist(file_name):
             return
-        async with session.get(url, headers=headers, ssl=False) as resp:
+        headers_ = self.headers
+        async with session.get(download_item.url, headers=headers_.update(download_item.headers),
+                               ssl=False) as resp:
             with open(TEMP_DIR + '/' + file_name, 'wb') as fd:
                 if resp.status != 200:
                     raise Exception('请求失败')
-                while True:
-                    chunk = await resp.content.read()
+                else:
+                    print('接收资源: {}'.format(download_item.file_name + download_item.headers.get('Range', '')))
+                    self._signal.emit(
+                        '接收资源: {}'.format(download_item.file_name + download_item.headers.get('Range', '')))
+                # block_sz = 2048
+                # async for chunk in resp.content.read():
+                while 1:
+                    chunk = await resp.content.read(8192)
                     if not chunk:
                         break
                     fd.write(chunk)
             self._signal.emit('写入: ' + file_name)
 
-    async def download_task(self, session: aiohttp.ClientSession):
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36'}
+    async def download_async(self, nid, session: aiohttp.ClientSession):
         while not self.finish:
             try:
-                url = self.task_queue.get(block=False)
+                url_item = self.task_queue.get(block=False)
             except Empty:
                 await asyncio.sleep(1)
                 continue
             except:
                 print(traceback.format_exc())
                 continue
-            print(url, ' 开始下载')
+            print(url_item.url, ' 开始下载')
             try:
-                task = asyncio.ensure_future(self.fetch(url, headers, session))
-                await asyncio.wait_for(task, 10)
+                await self.fetch(url_item, session)
                 self.finish_count += 1
                 self._progress_signal.emit(self.finish_count, self.task_count)
                 print(' 成功++++')
@@ -266,29 +310,48 @@ class ThreadDownloader(QThread):
                 if self.finish_count == self.task_count:
                     self.finish = True
             except CancelledError:
-                break
+                print('{} 取消 {}'.format(nid, url_item.url))
+                FileManager.delete_file(TEMP_DIR + '/' + url_item.file_name)
+                return
             except:
+                FileManager.delete_file(TEMP_DIR + '/' + url_item.file_name)
                 print(traceback.format_exc())
-                self.task_queue.put(url)
+                self.task_queue.put(url_item)
                 print(' 失败----')
+
+    async def stop_listen(self):
+        while not self.stop_flag and not self.finish:
+            await asyncio.sleep(0)
+        if self.stop_flag:
+            self._start_btn_signal.emit(0)
+            for task in self.tasks:
+                task.cancel()
 
     async def download(self):
         self.task_count = self.task_queue.qsize()
         self.finish = False
-        tasks = []
+        self.tasks = []
         async with aiohttp.ClientSession() as session:
-            loop = asyncio.get_event_loop()
             for i in range(self.task_max_count):
                 try:
-                    task = loop.create_task(self.download_task(session))
-                    tasks.append(task)
+                    task = asyncio.create_task(self.download_async(i, session))
+                    self.tasks.append(task)
                 except Empty:
                     await asyncio.sleep(0)
-            await asyncio.wait(tasks)
-            print('全部停止')
+            for task in self.tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    async def run_async(self):
+        self.download_task = asyncio.ensure_future(self.download())
+        listen_task = asyncio.ensure_future(self.stop_listen())
+        await asyncio.gather(*[listen_task, self.download_task])
 
     def run(self):
-        asyncio.run(self.download())
+        asyncio.run(self.run_async())
+        print('全部停止')
 
 
 class Core(QThread):
@@ -297,17 +360,14 @@ class Core(QThread):
     _set_thread_count_and_filename_signal = pyqtSignal(int, str)
     _finish_signal = pyqtSignal()
 
-    def __init__(self, url, thread_count, save_file_name, downloader: ThreadDownloader, file_manager: FileManager,
-                 key_manager: KeyManager):
+    def __init__(self, url, thread_count, save_file_name, file_manager: FileManager):
         super(Core, self).__init__()
         self.url = url
         self.save_file_name = save_file_name
         self.thread_count = thread_count
         self.url_queue = Queue()
-        self.downloader = downloader
+        self.downloader = None
         self.m3u8_file = None
-        self.stop_flag = False
-        self.key_manager = key_manager
         self.file_manager = file_manager
         self._signal.connect(print_log)
         self._start_btn_signal.connect(set_start_btn)
@@ -318,7 +378,7 @@ class Core(QThread):
         self.save_file_name = file_name
         self.thread_count = thread_count
 
-    def check_fill(self, thread_count_, file_name_):
+    def check_fill(self, thread_count_, file_name_, url_):
         try:
             thread_count = int(thread_count_)
         except:
@@ -327,30 +387,28 @@ class Core(QThread):
             thread_count = 256
         if thread_count < 1:
             thread_count = 1
-        self.save_file_name = make_file_name(file_name_)
+        self.save_file_name = make_file_name(file_name_, url_)
         self.thread_count = thread_count
         self._set_thread_count_and_filename_signal.emit(thread_count, self.save_file_name)
 
     def run(self):
         self._start_btn_signal.emit(2)
-        self.check_fill(self.thread_count, self.save_file_name)
-        self.m3u8_file = M3U8File(self.url)
         self._signal.emit('开始解析...')
-        if self.m3u8_file.loads():
+        if '.m3u8' in self.url:
+            download_info = M3U8File(self.url)
+        else:
+            download_info = SimpleFile(self.url, self.thread_count)
+        if download_info.loads():
             self._signal.emit('解析成功...')
-            for i in self.m3u8_file.ts_list:
+            for i in download_info.ts_list:
                 self.url_queue.put(i)
-            self.key_manager.init(self.m3u8_file.key, self.m3u8_file.iv, self.m3u8_file.mode)
-            self.file_manager.init(out_name=self.save_file_name, key_manager=self.key_manager,
-                                   ts_list=self.m3u8_file.ts_list)
-            self.downloader.init(self.thread_count, self.url_queue)
+            self.file_manager.init(out_name=self.save_file_name, download_file=download_info)
             self.downloader.start()
             while not self.downloader.isFinished():
-                if self.stop_flag:
-                    self._start_btn_signal.emit(0)
-                    self.downloader.finish = True
                 time.sleep(1)
-            if self.stop_flag:
+            if self.downloader.stop_flag:
+                self._start_btn_signal.emit(1)
+                self.downloader.finish = True
                 self._signal.emit('已停止.')
             else:
                 self._signal.emit('开始合并.')
@@ -362,12 +420,16 @@ class Core(QThread):
         else:
             self._signal.emit('解析失败...')
             set_finish()
-            return
 
 
-def make_file_name(user_set_name):
+def make_file_name(user_set_name, url_):
     if not user_set_name:
-        file_name = str(time.strftime('%Y%m%d%H%M%S', time.localtime())) + '.mp4'
+        if '.m3u8' in url_:
+            file_name = str(time.strftime('%Y%m%d%H%M%S', time.localtime()))
+        else:
+            file_name = url_.split('/')[-1]
+        if '.' not in file_name:
+            file_name = file_name + '.mp4'
     else:
         file_name = user_set_name
     return file_name
