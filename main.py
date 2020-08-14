@@ -127,9 +127,9 @@ class SimpleFile(DownloadInfo):
             response = req_url(self.start_url, stream=True)
             file_size = int(response.headers['content-length'])
             offset = int(file_size / self.thread_count) + 1
-            e_size = 0
+            e_size = -1
             while file_size >= e_size:
-                s_size = e_size
+                s_size = e_size + 1
                 e_size = s_size + offset
                 self.ts_list.append(
                     DownloadItem(url=self.start_url,
@@ -272,10 +272,11 @@ class ThreadDownloader(QThread):
         if check_file_exist(file_name):
             return
         headers_ = self.headers
-        async with session.get(download_item.url, headers=headers_.update(download_item.headers),
+        headers_.update(download_item.headers)
+        async with session.get(download_item.url, headers=headers_,
                                ssl=False) as resp:
             with open(TEMP_DIR + '/' + file_name, 'wb') as fd:
-                if resp.status != 200:
+                if not resp or resp.status not in [200, 206]:
                     raise Exception('请求失败')
                 else:
                     print('接收资源: {}'.format(download_item.file_name + download_item.headers.get('Range', '')))
